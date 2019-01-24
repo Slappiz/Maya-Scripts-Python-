@@ -1,0 +1,283 @@
+import maya.cmds as cmds
+import pymel.core as pm
+import os
+from shutil import copyfile
+
+# g - Group name, object name in Maya (g MyModelName)
+# v - Position (v 0.5 0.0 0.5)
+# vt - Texture coordinate (vt 1.0 0.0)
+# vn - Normal (vn 1.0 0.0 0.0)
+# f - Face, indices for pos/uv/normal (f 1/1/2 2/2/1 3/3/4)
+# s - Smoothing information (s 1)
+# mtllib - Material filepath, relative to .obj file (mtllib myMaterial.mtl)
+# usemtl - - Material name, faces following usemtl will be affected (usemtl lambert5)
+
+def createFile(*args): #Main Function
+    filePath = pm.fileDialog2(dialogStyle = 2, fileFilter = '*obj')
+    myObj = open(filePath[0], 'w')
+   
+    filePathToString = str(filePath).replace("']", "") #No idea where they come from
+    fileNameRaw = os.path.basename(filePathToString)
+    fileName = fileNameRaw.replace(".obj",".mtl") #replace obj with mtl
+    print ('FileName: ' + fileName)
+    
+    myObj.write('# This file uses centimeters as units for non-parametric coordinates.\r\n') 
+    myObj.write('\r\nmtllib %s\r\n' % (fileName))
+    if(cbTriangulated.getValue() == 1):
+        myObj.write('g default\r\n')
+    if(cbExportSelection.getValue() == 1):
+        saveSelectionData(myObj)#save selected objects to file
+    if(cbExportSelection.getValue() == 0):
+        saveAllData(myObj) #save all objects to file    
+    
+    if(cbExportMaterial.getValue() == 1):
+        iffFileName = ""
+        try:
+            iffFileName = saveTexture(filePathToString)
+        except:
+            print 'No texture file found'
+        mtlFilePath = filePathToString.replace("[u'", "")
+        mtlFilePath = mtlFilePath.replace(".obj",".mtl")
+        myMtl = open(mtlFilePath, 'w')
+        saveMaterial(myMtl, iffFileName)
+        myMtl.close()
+            
+    myObj.close()
+    
+    print 'Obj Created'
+
+def saveTexture(filePathToString): #Makes a copy of the texture file and returns the copy file name. 
+    selected = pm.selected()[0]
+    mesh = selected.getShape()
+    
+    sg = mesh.outputs(type = 'shadingEngine')
+    sgInfo = sg[0].connections(type = 'materialInfo')
+    fileNode = sgInfo[0].connections(type = 'file')
+    textureFile = pm.getAttr(fileNode[0].fileTextureName)
+       
+    print '(saveTexture)TextureFile: ' + str(textureFile)
+    
+    newTextureFile = filePathToString.replace('.obj', '_texture.iff')
+    newTextureFile = newTextureFile.replace("[u'", "")
+    print '(saveTexture)newTextureFile: ' + str(newTextureFile)
+    copyfile(textureFile, newTextureFile)
+    
+    iffFileName = os.path.basename(newTextureFile)
+    
+    return iffFileName  
+    
+def getTexture(mesh): #
+    sg = mesh.outputs(type = 'shadingEngine')
+    sgInfo = sg[0].connections(type = 'materialInfo')
+    fileNode = sgInfo[0].connections(type = 'file')
+    textureFile = pm.getAttr(fileNode[0].fileTextureName)   
+    print '(getTexture)TextureFile: ' + str(textureFile)
+    textureFilePath = str(textureFile)
+    textureFileName = os.path.basename(textureFilePath)
+    
+    #textureFileCopy = textureFile.replace(".iff", "Copy.iff")
+    #print str(textureFileCopy)
+    #copyfile(textureFile, textureFileCopy)
+    
+    return textureFileName #not needed    
+    
+def saveMaterial(myMtl, iffFileName):
+    selected = pm.selected()[0]
+    mesh = selected.getShape()
+    
+    shadeGroup = mesh.listConnections(type = 'shadingEngine')[0]
+    materialInfo = shadeGroup.listConnections(type = 'materialInfo')[0]
+    specMaterial = materialInfo.listConnections(type = 'lambert')[0]
+
+    myMtl.write('newmtl %s\r\nillum 4\r\n' % (shadeGroup)) 
+    temp = specMaterial.getColor() #rgb
+    myMtl.write('Kd %f %f %f\r\n' % (temp[0], temp[1], temp[2]))
+    temp = specMaterial.getAmbientColor()
+    myMtl.write('Ka %f %f %f\r\n' % (temp[0], temp[1], temp[2]))
+    #temp = specMaterial.getTransparency() # Only works correctly for lambert material
+    #myMtl.write('Tf %f %f %f\r\n' % (temp[0], temp[1], temp[2]))
+    myMtl.write('Tf 1.00 1.00 1.00\r\n')
+
+    try: 
+        texture = getTexture(mesh) # Needed for try/except to check if there is a .iff file for the original mesh. Could also be achieved with a simple if statement (iffFileName != "")    
+        myMtl.write ('map_Kd %s\r\n' % (iffFileName))
+    except:
+        print 'No texture'
+    
+    temp = specMaterial.getRefractiveIndex()
+    myMtl.write('Ni %f\r\n' % (temp))
+    try:
+        temp = specMaterial.getSpecularColor()
+        myMtl.write('Ks %f %f %f\r\n' % (temp[0], temp[1], temp[2]))
+    except:
+        print 'No specular color'    
+
+def saveAllData(myObj):
+    meshSpace = getLocalGlobal()
+    
+    getObjects = pm.ls(type = 'mesh')
+    transform = pm.listRelatives(getObjects, p = True, path = True)
+    pm.select(transform, r=True) #Selects all meshes in scene
+    selection = pm.ls(selection = True) #Saves selected meshes to selection
+    
+    if(cbTriangulated.getValue() == 1):
+        for object in selection:
+            pm.select(object, r=True)
+            pm.polyTriangulate()
+    
+    for object in selection:
+        mesh = object.getShape()
+        temp = []
+        temp2 = []
+        shadeGroup = mesh.listConnections(type = 'shadingEngine')[0]
+           
+        for vertex in range(mesh.numVertices()):
+            temp = mesh.vtx[vertex].getPosition(space = meshSpace)
+            myObj.write('v %f %f %f\r\n' % (temp[0], temp[1], temp[2]))
+            
+        for uv in range(mesh.numUVs()):
+            temp2.append(mesh.getUV(uv, uvSet = None))
+            myObj.write ('vt %f %f\r\n' % (temp2[uv][0], temp2[uv][1]))
+            
+        if(cbTriangulated.getValue() == 1):
+            triangleTrigger = 1 #switch between writing vertp  1, 2 and 3 to writing vertp 4 in file
+            for face in range(mesh.numFaces()):
+                temp = mesh.f[face].getNormals(space = meshSpace)
+                if(triangleTrigger == 1):
+                    myObj.write ('vn %f %f %f\r\n' % (temp[0][0], temp[0][1], temp[0][2]))
+                    myObj.write ('vn %f %f %f\r\n' % (temp[1][0], temp[1][1], temp[1][2]))
+                    myObj.write ('vn %f %f %f\r\n' % (temp[2][0], temp[2][1], temp[2][2]))  
+                    triangleTrigger = 0
+                else:
+                    myObj.write ('vn %f %f %f\r\n' % (temp[2][0], temp[2][1], temp[2][2]))
+                    triangleTrigger = 1        
+        else:
+            for face in range(mesh.numFaces()):
+                temp = mesh.f[face].getNormals(space = meshSpace)
+                myObj.write ('vn %f %f %f\r\n' % (temp[0][0], temp[0][1], temp[0][2]))
+                myObj.write ('vn %f %f %f\r\n' % (temp[1][0], temp[1][1], temp[1][2]))
+                myObj.write ('vn %f %f %f\r\n' % (temp[2][0], temp[2][1], temp[2][2]))
+                myObj.write ('vn %f %f %f\r\n' % (temp[3][0], temp[3][1], temp[3][2]))
+                
+        myObj.write ('s 1\r\ng %s\r\nusemtl %s' % (object.getInstances()[0], shadeGroup))
+        
+        for f_index, face in enumerate(mesh.faces):
+             myObj.write ('\r\nf ')
+             for fv_index, face_vertex  in enumerate(face.getVertices()):
+                 myObj.write ('%s/%s/%s ' % (face.getVertices()[fv_index]+1, face.getUVIndex(fv_index)+1, face.normalIndex(fv_index)+1))
+        myObj.write ('\r\n')
+                  
+def saveSelectionData(myObj):
+    meshSpace = getLocalGlobal()
+    selection = pm.ls(selection = True)
+    
+    if(cbTriangulated.getValue() == 1):
+        for object in selection:
+            pm.select(object, r=True)
+            pm.polyTriangulate() 
+               
+    for object in selection: #
+        mesh = object.getShape()
+        temp = []
+        temp2 = []
+        shadeGroup = mesh.listConnections(type = 'shadingEngine')[0]
+
+        for vertex in range(mesh.numVertices()):
+            temp = mesh.vtx[vertex].getPosition(space = meshSpace)
+            myObj.write('v %f %f %f\r\n' % (temp[0], temp[1], temp[2]))
+            
+        for uv in range(mesh.numUVs()):
+            temp2.append(mesh.getUV(uv, uvSet = None))
+            myObj.write ('vt %f %f\r\n' % (temp2[uv][0], temp2[uv][1]))
+            
+        if(cbTriangulated.getValue() == 1):
+            triangleTrigger = 1 #switch between writing vertp  1, 2 and 3 to writing vertp 4 in file
+            for face in range(mesh.numFaces()):
+                temp = mesh.f[face].getNormals(space = meshSpace)
+                if(triangleTrigger == 1):
+                    myObj.write ('vn %f %f %f\r\n' % (temp[0][0], temp[0][1], temp[0][2]))
+                    myObj.write ('vn %f %f %f\r\n' % (temp[1][0], temp[1][1], temp[1][2]))
+                    myObj.write ('vn %f %f %f\r\n' % (temp[2][0], temp[2][1], temp[2][2]))  
+                    triangleTrigger = 0
+                else:
+                    myObj.write ('vn %f %f %f\r\n' % (temp[2][0], temp[2][1], temp[2][2]))
+                    triangleTrigger = 1        
+        else:
+            for face in range(mesh.numFaces()):
+                temp = mesh.f[face].getNormals(space = meshSpace)
+                myObj.write ('vn %f %f %f\r\n' % (temp[0][0], temp[0][1], temp[0][2]))
+                myObj.write ('vn %f %f %f\r\n' % (temp[1][0], temp[1][1], temp[1][2]))
+                myObj.write ('vn %f %f %f\r\n' % (temp[2][0], temp[2][1], temp[2][2]))
+                myObj.write ('vn %f %f %f\r\n' % (temp[3][0], temp[3][1], temp[3][2]))
+                
+        myObj.write ('s 1\r\ng %s\r\nusemtl %s' % (object.getInstances()[0], shadeGroup))
+        
+        for f_index, face in enumerate(mesh.faces):
+             myObj.write ('\r\nf ')
+             for fv_index, face_vertex  in enumerate(face.getVertices()):
+                 myObj.write ('%s/%s/%s ' % (face.getVertices()[fv_index]+1, face.getUVIndex(fv_index)+1, face.normalIndex(fv_index)+1))
+        myObj.write ('\r\n')  
+
+def getLocalGlobal(*args): #Return the value of space: Object/World in UI as a string.
+    radioCol = cmds.radioCollection(rCollection, query=True, sl=True)
+    getSelectedRadioVal = cmds.radioButton(radioCol, query=True, label=True)
+    
+    if(getSelectedRadioVal == 'Object'):
+        returnString = 'object'
+        return returnString
+    else:
+        returnString = 'world'
+        return returnString   
+
+def testFunc2(*args):
+    getObjects = pm.ls(type = 'mesh')
+    transform = pm.listRelatives(getObjects, p = True, path = True)
+    pm.select(transform, r=True)
+    selection = pm.ls(selection = True)
+    
+    for object in selection:
+        test = object.getShape()
+    
+    print ('Objects: ' + str(getObjsInScene))
+    print ('Transform: ' + str(transform))
+
+def testFunc(*args):
+    object = pm.ls(selection = True)
+    type = str(pm.nodeType(object))  
+    allObjects = pm.ls(l = True)
+    typeAll = str(pm.nodeType(allObjects)) 
+    transform = pm.ls( transforms = True)
+    
+    for mesh in transform:
+        if(pm.nodeType(mesh) != 'front'):
+            print str(mesh)
+        else:
+            print 'Broken'
+    
+    print ('Test: ' + transform[1])            
+    print str(object)
+    print type
+    print str(allObjects)
+    print typeAll
+    print str(transform)
+  	
+#GUI
+pm.window( width=150 )
+pm.columnLayout( adjustableColumn=True )
+#Triangulate
+#bthTest = pm.button ( label = 'Test', command=testFunc2)
+pm.frameLayout(label = 'Options')
+cbTriangulated = pm.checkBox(label = 'Triangulate')
+#Export Selection
+cbExportSelection = pm.checkBox(label = 'Export Selection', value = True) #
+cbExportMaterial = pm.checkBox(label = 'Export Material', value = True)
+#
+pm.frameLayout(label = 'Space')
+rCollection = pm.radioCollection()
+rButtonObject = pm.radioButton(label = 'Object', cl = rCollection)
+rButtonWorld = pm.radioButton(label = 'World', cl = rCollection)
+pm.radioCollection( rCollection, edit = True, select = rButtonWorld)
+#
+btnExport = pm.button( label='Export', command=createFile ) #function call
+pm.frameLayout(label = 'Tooltip: Finish filename with ".obj"')
+pm.showWindow()
